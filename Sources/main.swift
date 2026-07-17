@@ -126,7 +126,11 @@ final class ClaudeUsageFetcher {
             }
             result = ClaudeUsage(rows: rows, error: nil)
         }.resume()
-        sem.wait()
+        // Bounded wait: across deep-sleep transitions a completion can be lost;
+        // an infinite wait would wedge the serial scan queue permanently.
+        if sem.wait(timeout: .now() + 30) == .timedOut {
+            return ClaudeUsage(error: "Request timed out")
+        }
         return result
     }
 }
@@ -251,6 +255,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 120, repeats: true) { [weak self] _ in
             self?.refresh()
+        }
+
+        // Force a fresh fetch when the machine wakes; timers and throttle state
+        // carried across sleep would otherwise leave stale numbers on screen.
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.claudeCooldownUntil = .distantPast
+            self.refresh(force: true)
         }
     }
 
